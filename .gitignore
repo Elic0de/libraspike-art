@@ -1,1 +1,5 @@
 tools/*
+lib/*.a
+sample/*.o
+sample/loop_period_measure
+sample/*_loop_period.csv

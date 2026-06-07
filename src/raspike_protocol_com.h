@@ -28,6 +28,20 @@
 #define RP_CMD_ID_ALL_STATUS (MAKE_CMD(RP_CMD_TYPE_SYS,0x1)) // 0x01
 #define RP_CMD_ID_ACK (MAKE_CMD(RP_CMD_TYPE_SYS,0x2)) // 0x02
 #define RP_CMD_ID_SHT_DWN (MAKE_CMD(RP_CMD_TYPE_SYS,0x3)) // 0x03
+#define RP_CMD_ID_MEASURE_ROW (MAKE_CMD(RP_CMD_TYPE_SYS,0x5)) // 0x05
+#define RP_CMD_ID_MEASURE_FLUSH (MAKE_CMD(RP_CMD_TYPE_SYS,0x6)) // 0x06
+
+typedef struct {
+    int32_t source_id;
+    int32_t seq;
+    int32_t timestamp_us;
+    int32_t dt_us;
+    int32_t body_us;
+    int32_t deadline_lag_us;
+    int32_t port;
+    int32_t cmd;
+    int32_t value;
+} RPProtocolMeasureRow;
 
 // COLOR SENSOR CMD
 #define RP_CMD_ID_COL_CFG (MAKE_CMD(RP_CMD_TYPE_COLOR,0x0)) // 0x20

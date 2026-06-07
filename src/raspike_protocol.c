@@ -118,6 +118,45 @@ static int stop_communication = 0;
 static unsigned char version_major = 0;
 static unsigned char version_minor = 0;
 static unsigned char version_patch = 0;
+static FILE *fgMeasureCsv = 0;
+
+static const char *measure_source_name(int source_id)
+{
+  switch (source_id) {
+  case 1:
+    return "mot_pow_rx";
+  case 2:
+    return "notify_task";
+  default:
+    return "unknown";
+  }
+}
+
+static void write_measure_row(const unsigned char *buf, int size)
+{
+  if (size < (int)sizeof(RPProtocolMeasureRow)) {
+    return;
+  }
+  const char *path = getenv("RASPIKE_MEASURE_RX_CSV");
+  if (path == 0 || path[0] == '\0') {
+    return;
+  }
+  if (fgMeasureCsv == 0) {
+    fgMeasureCsv = fopen(path, "w");
+    if (fgMeasureCsv == 0) {
+      return;
+    }
+    fprintf(fgMeasureCsv,
+            "source,seq,timestamp_us,dt_us,body_us,deadline_lag_us,port,cmd,value\n");
+  }
+
+  RPProtocolMeasureRow row;
+  memcpy(&row, buf, sizeof(row));
+  fprintf(fgMeasureCsv, "%s,%d,%d,%d,%d,%d,%d,0x%02x,%d\n",
+          measure_source_name(row.source_id), row.seq, row.timestamp_us, row.dt_us,
+          row.body_us, row.deadline_lag_us, row.port, row.cmd, row.value);
+  fflush(fgMeasureCsv);
+}
 
 int raspike_prot_init(RPComDescriptor *desc)
 {
@@ -182,8 +221,22 @@ int raspike_prot_init(RPComDescriptor *desc)
 int raspike_prot_shutdown(void)
 {
   stop_communication = 0;
+  if (fgMeasureCsv != 0) {
+    fclose(fgMeasureCsv);
+    fgMeasureCsv = 0;
+  }
   raspike_com_close(fgDesc);
   return 0;
+}
+
+int raspike_prot_measure_flush(void)
+{
+  if (fgDesc == 0) {
+    return -1;
+  }
+  int ret = raspike_prot_send(RP_PORT_NONE, RP_CMD_ID_MEASURE_FLUSH, 0, 0);
+  raspike_com_flush(fgDesc);
+  return ret;
 }
 
 
@@ -254,6 +307,9 @@ static int process_command(RasPikePort port, unsigned char cmd, unsigned char *b
       raspike_mutex_unlock(&dev->mutex);
     }
       break;
+  case RP_CMD_ID_MEASURE_ROW:
+    write_measure_row(buf, size);
+    break;
   default:
     ret = -1;
     break;
