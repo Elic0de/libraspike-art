@@ -176,10 +176,12 @@ int main(int argc, char const *argv[])
     raspike_prot_shutdown();
     return 1;
   }
-  if (pup_motor_setup(left, PUP_DIRECTION_COUNTERCLOCKWISE, true) != PBIO_SUCCESS ||
-      pup_motor_setup(right, PUP_DIRECTION_CLOCKWISE, true) != PBIO_SUCCESS) {
-    fprintf(stderr, "motor setup failed: left=%c right=%c\n",
-            port_name(left_port), port_name(right_port));
+  pbio_error_t left_setup = pup_motor_setup(left, PUP_DIRECTION_COUNTERCLOCKWISE, true);
+  pbio_error_t right_setup = pup_motor_setup(right, PUP_DIRECTION_CLOCKWISE, true);
+  if (left_setup != 1 || right_setup != 1) {
+    fprintf(stderr, "motor setup failed: left=%c ret=%d right=%c ret=%d\n",
+            port_name(left_port), (int)left_setup,
+            port_name(right_port), (int)right_setup);
     g_receive_running = 0;
     pthread_cancel(receiver);
     pthread_join(receiver, NULL);
