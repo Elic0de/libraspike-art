@@ -128,6 +128,10 @@ static const char *measure_source_name(int source_id)
     return "mot_pow_rx";
   case 2:
     return "notify_task";
+  case 3:
+    return "mot_pow_rx_anomaly";
+  case 4:
+    return "notify_task_anomaly";
   default:
     return "unknown";
   }

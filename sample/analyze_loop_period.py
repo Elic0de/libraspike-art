@@ -86,6 +86,11 @@ def summarize(label, values, tolerance_us):
     return ok
 
 
+def summarize_if_any(label, values, tolerance_us):
+    if values:
+        summarize(label, values, tolerance_us)
+
+
 def main():
     if len(sys.argv) < 2 or len(sys.argv) > 4:
         print(
@@ -101,6 +106,8 @@ def main():
     if len(sys.argv) >= 3:
         if os.path.exists(sys.argv[2]):
             ok = summarize("spike_mot_pow_rx", read_dt(sys.argv[2], "mot_pow_rx"), tolerance_us) and ok
+            summarize_if_any("spike_mot_pow_rx_anomaly", read_dt(sys.argv[2], "mot_pow_rx_anomaly"), tolerance_us)
+            summarize_if_any("spike_notify_task_anomaly", read_dt(sys.argv[2], "notify_task_anomaly"), tolerance_us)
         else:
             print(f"spike_mot_pow_rx: skipped missing file: {sys.argv[2]}")
 
