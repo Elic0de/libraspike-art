@@ -70,6 +70,11 @@ static int port_id(const char *name)
   return name[0] - 'A';
 }
 
+static char port_name(int port)
+{
+  return (char)('A' + port);
+}
+
 static int parse_int_arg(const char *value, const char *label)
 {
   char *end = NULL;
@@ -151,24 +156,57 @@ int main(int argc, char const *argv[])
     fprintf(stderr, "raspike_prot_init failed\n");
     return 1;
   }
+  fprintf(stderr, "connected: %s\n", device);
 
   pthread_t receiver;
-  pthread_create(&receiver, NULL, receiver_task, NULL);
+  if (pthread_create(&receiver, NULL, receiver_task, NULL) != 0) {
+    fprintf(stderr, "pthread_create failed\n");
+    raspike_prot_shutdown();
+    return 1;
+  }
 
   pup_motor_t *left = pup_motor_get_device((pbio_port_id_t)left_port);
   pup_motor_t *right = pup_motor_get_device((pbio_port_id_t)right_port);
-  pup_motor_setup(left, PUP_DIRECTION_COUNTERCLOCKWISE, true);
-  pup_motor_setup(right, PUP_DIRECTION_CLOCKWISE, true);
+  if (left == NULL || right == NULL) {
+    fprintf(stderr, "motor device not found: left=%c right=%c\n",
+            port_name(left_port), port_name(right_port));
+    g_receive_running = 0;
+    pthread_cancel(receiver);
+    pthread_join(receiver, NULL);
+    raspike_prot_shutdown();
+    return 1;
+  }
+  if (pup_motor_setup(left, PUP_DIRECTION_COUNTERCLOCKWISE, true) != PBIO_SUCCESS ||
+      pup_motor_setup(right, PUP_DIRECTION_CLOCKWISE, true) != PBIO_SUCCESS) {
+    fprintf(stderr, "motor setup failed: left=%c right=%c\n",
+            port_name(left_port), port_name(right_port));
+    g_receive_running = 0;
+    pthread_cancel(receiver);
+    pthread_join(receiver, NULL);
+    raspike_prot_shutdown();
+    return 1;
+  }
+  fprintf(stderr, "motors ready: left=%c right=%c\n",
+          port_name(left_port), port_name(right_port));
 
   pup_device_t *color = NULL;
   if (mode == MEASURE_MODE_ALL || mode == MEASURE_MODE_TRACE) {
     hub_imu_init();
     color = pup_color_sensor_get_device((pbio_port_id_t)color_port);
+    if (color == NULL) {
+      fprintf(stderr, "color sensor not found: port=%c\n", port_name(color_port));
+      g_receive_running = 0;
+      pthread_cancel(receiver);
+      pthread_join(receiver, NULL);
+      raspike_prot_shutdown();
+      return 1;
+    }
     if (mode == MEASURE_MODE_TRACE) {
       (void)pup_color_sensor_reflection(color);
     } else {
       (void)pup_color_sensor_rgb(color);
     }
+    fprintf(stderr, "color sensor ready: port=%c\n", port_name(color_port));
   }
 
   fprintf(stdout,
