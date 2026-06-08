@@ -220,7 +220,7 @@ int raspike_prot_init(RPComDescriptor *desc)
 
 int raspike_prot_shutdown(void)
 {
-  stop_communication = 0;
+  stop_communication = 1;
   if (fgMeasureCsv != 0) {
     fclose(fgMeasureCsv);
     fgMeasureCsv = 0;

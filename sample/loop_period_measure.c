@@ -259,6 +259,8 @@ int main(int argc, char const *argv[])
   raspike_prot_measure_flush();
   sleep(2);
   g_receive_running = 0;
+  pthread_cancel(receiver);
+  pthread_join(receiver, NULL);
   raspike_prot_shutdown();
   fflush(stdout);
   return 0;
