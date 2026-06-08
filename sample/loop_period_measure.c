@@ -17,12 +17,43 @@
 #define DEFAULT_ITERATIONS 2000
 #define DEFAULT_PERIOD_US 10000
 #define DEFAULT_PWM 0
+#define DEFAULT_TRACE_TARGET 50
+#define DEFAULT_TRACE_EDGE_SIGN 1
+#define DEFAULT_TRACE_KP 0.55f
+#define DEFAULT_TRACE_KI 0.0f
+#define DEFAULT_TRACE_KD 0.03f
+#define DEFAULT_TRACE_MAX_TURN 22
+#define DEFAULT_TRACE_YAW_RATE_GAIN 0.0f
+#define TRACE_INTEGRAL_LIMIT 200.0f
+#define TRACE_DERIVATIVE_ALPHA 0.35f
+#define TRACE_ERROR_FILTER_ALPHA 0.45f
+#define TRACE_MIN_DRIVE_PWM 30
 
 typedef enum {
   MEASURE_MODE_MOTOR,
   MEASURE_MODE_ALL,
   MEASURE_MODE_TRACE,
 } MeasureMode;
+
+typedef struct {
+  int target_reflection;
+  int edge_sign;
+  float kp;
+  float ki;
+  float kd;
+  int max_turn_pwm;
+  float yaw_rate_gain;
+} TraceLoadConfig;
+
+typedef struct {
+  float previous_error;
+  float integral;
+  float derivative_filtered;
+  float error_filtered;
+  float previous_heading;
+  float yaw_rate_deg_per_sec;
+  int initialized;
+} TraceLoadState;
 
 static volatile int g_receive_running = 1;
 
@@ -86,11 +117,114 @@ static int parse_int_arg(const char *value, const char *label)
   return (int)parsed;
 }
 
+static float parse_float_arg(const char *value, const char *label)
+{
+  char *end = NULL;
+  float parsed = strtof(value, &end);
+  if (end == value || *end != '\0') {
+    fprintf(stderr, "%s must be a number: %s\n", label, value);
+    exit(2);
+  }
+  return parsed;
+}
+
 static int clamp_power(int value)
 {
   if (value > 100) return 100;
   if (value < -100) return -100;
   return value;
+}
+
+static float clamp_float(float value, float min_value, float max_value)
+{
+  if (value < min_value) return min_value;
+  if (value > max_value) return max_value;
+  return value;
+}
+
+static int round_to_int(float value)
+{
+  return value >= 0.0f ? (int)(value + 0.5f) : (int)(value - 0.5f);
+}
+
+static int clamp_turn(float value, int limit_abs)
+{
+  return round_to_int(clamp_float(value, (float)-limit_abs, (float)limit_abs));
+}
+
+static int apply_minimum_drive_pwm(int value)
+{
+  if (value > 0 && value < TRACE_MIN_DRIVE_PWM) return TRACE_MIN_DRIVE_PWM;
+  if (value < 0 && value > -TRACE_MIN_DRIVE_PWM) return -TRACE_MIN_DRIVE_PWM;
+  return value;
+}
+
+static float heading_delta_deg(float current, float previous)
+{
+  float delta = current - previous;
+  while (delta > 180.0f) delta -= 360.0f;
+  while (delta < -180.0f) delta += 360.0f;
+  return delta;
+}
+
+static int trace_load_update(const TraceLoadConfig *config,
+                             TraceLoadState *state,
+                             int base_pwm,
+                             int period_us,
+                             int reflection,
+                             float heading,
+                             int *left_pwm,
+                             int *right_pwm,
+                             float *line_error_out,
+                             float *pid_p_out,
+                             float *pid_i_out,
+                             float *pid_d_out,
+                             float *yaw_rate_out)
+{
+  float dt_sec = (float)period_us / 1000000.0f;
+  if (dt_sec <= 0.0f) dt_sec = 0.01f;
+
+  float line_error = (float)(config->target_reflection - reflection) * (float)config->edge_sign;
+  if (!state->initialized) {
+    state->previous_error = line_error;
+    state->error_filtered = line_error;
+    state->previous_heading = heading;
+    state->initialized = 1;
+  }
+
+  state->error_filtered = TRACE_ERROR_FILTER_ALPHA * line_error +
+                          (1.0f - TRACE_ERROR_FILTER_ALPHA) * state->error_filtered;
+
+  state->integral = clamp_float(state->integral + state->error_filtered * dt_sec,
+                                -TRACE_INTEGRAL_LIMIT, TRACE_INTEGRAL_LIMIT);
+
+  float derivative_raw = (state->error_filtered - state->previous_error) / dt_sec;
+  state->derivative_filtered = TRACE_DERIVATIVE_ALPHA * derivative_raw +
+                               (1.0f - TRACE_DERIVATIVE_ALPHA) * state->derivative_filtered;
+  state->previous_error = state->error_filtered;
+
+  if ((state->initialized && (state->previous_heading != heading)) || state->yaw_rate_deg_per_sec != 0.0f) {
+    state->yaw_rate_deg_per_sec = heading_delta_deg(heading, state->previous_heading) / dt_sec;
+  }
+  state->previous_heading = heading;
+
+  float pid_p = config->kp * state->error_filtered;
+  float pid_i = config->ki * state->integral;
+  float pid_d = config->kd * state->derivative_filtered;
+  float turn = pid_p + pid_i + pid_d + state->yaw_rate_deg_per_sec * config->yaw_rate_gain;
+  int turn_pwm = clamp_turn(turn, config->max_turn_pwm);
+
+  int left = clamp_power(base_pwm + turn_pwm);
+  int right = clamp_power(base_pwm - turn_pwm);
+  *left_pwm = base_pwm == 0 ? left : apply_minimum_drive_pwm(left);
+  *right_pwm = base_pwm == 0 ? right : apply_minimum_drive_pwm(right);
+
+  if (line_error_out) *line_error_out = state->error_filtered;
+  if (pid_p_out) *pid_p_out = pid_p;
+  if (pid_i_out) *pid_i_out = pid_i;
+  if (pid_d_out) *pid_d_out = pid_d;
+  if (yaw_rate_out) *yaw_rate_out = state->yaw_rate_deg_per_sec;
+  return turn_pwm;
 }
 
 static MeasureMode parse_mode_arg(const char *value)
@@ -112,9 +246,13 @@ static void usage(const char *argv0)
 {
   fprintf(stderr,
           "usage: %s [device] [iterations] [period_us] [pwm] [left_port] [right_port] [mode] [color_port]\n"
+          "       %s ... trace [color_port] [target] [edge_sign] [kp] [ki] [kd] [max_turn] [yaw_rate_gain]\n"
           "defaults: device=%s iterations=%d period_us=%d pwm=%d left=B right=A mode=motor color=E\n"
-          "modes: motor=fixed PWM, all=fixed PWM plus sensors, trace=color/gyro correction plus variable PWM\n",
-          argv0, DEFAULT_DEVICE, DEFAULT_ITERATIONS, DEFAULT_PERIOD_US, DEFAULT_PWM);
+          "trace defaults: target=%d edge_sign=%d kp=%.2f ki=%.2f kd=%.2f max_turn=%d yaw_rate_gain=%.2f\n"
+          "modes: motor=fixed PWM, all=fixed PWM plus sensors, trace=realistic line-trace load\n",
+          argv0, argv0, DEFAULT_DEVICE, DEFAULT_ITERATIONS, DEFAULT_PERIOD_US, DEFAULT_PWM,
+          DEFAULT_TRACE_TARGET, DEFAULT_TRACE_EDGE_SIGN, DEFAULT_TRACE_KP, DEFAULT_TRACE_KI,
+          DEFAULT_TRACE_KD, DEFAULT_TRACE_MAX_TURN, DEFAULT_TRACE_YAW_RATE_GAIN);
 }
 
 int main(int argc, char const *argv[])
@@ -127,8 +265,18 @@ int main(int argc, char const *argv[])
   int right_port = port_id("A");
   MeasureMode mode = MEASURE_MODE_MOTOR;
   int color_port = port_id("E");
+  TraceLoadConfig trace_config = {
+    DEFAULT_TRACE_TARGET,
+    DEFAULT_TRACE_EDGE_SIGN,
+    DEFAULT_TRACE_KP,
+    DEFAULT_TRACE_KI,
+    DEFAULT_TRACE_KD,
+    DEFAULT_TRACE_MAX_TURN,
+    DEFAULT_TRACE_YAW_RATE_GAIN,
+  };
+  TraceLoadState trace_state = {0};
 
-  if (argc > 9) {
+  if (argc > 16) {
     usage(argv[0]);
     return 2;
   }
@@ -140,8 +288,17 @@ int main(int argc, char const *argv[])
   if (argc > 6) right_port = port_id(argv[6]);
   if (argc > 7) mode = parse_mode_arg(argv[7]);
   if (argc > 8) color_port = port_id(argv[8]);
+  if (argc > 9) trace_config.target_reflection = parse_int_arg(argv[9], "target");
+  if (argc > 10) trace_config.edge_sign = parse_int_arg(argv[10], "edge_sign") >= 0 ? 1 : -1;
+  if (argc > 11) trace_config.kp = parse_float_arg(argv[11], "kp");
+  if (argc > 12) trace_config.ki = parse_float_arg(argv[12], "ki");
+  if (argc > 13) trace_config.kd = parse_float_arg(argv[13], "kd");
+  if (argc > 14) trace_config.max_turn_pwm = parse_int_arg(argv[14], "max_turn");
+  if (argc > 15) trace_config.yaw_rate_gain = parse_float_arg(argv[15], "yaw_rate_gain");
 
-  if (iterations <= 1 || period_us <= 0 || pwm < -100 || pwm > 100) {
+  if (iterations <= 1 || period_us <= 0 || pwm < -100 || pwm > 100 ||
+      trace_config.target_reflection < 0 || trace_config.target_reflection > 100 ||
+      trace_config.max_turn_pwm < 0 || trace_config.max_turn_pwm > 100) {
     usage(argv[0]);
     return 2;
   }
@@ -210,13 +367,20 @@ int main(int argc, char const *argv[])
       (void)pup_color_sensor_rgb(color);
     }
     fprintf(stderr, "color sensor ready: port=%c\n", port_name(color_port));
+    if (mode == MEASURE_MODE_TRACE) {
+      fprintf(stderr,
+              "trace load: base_pwm=%d target=%d edge_sign=%d kp=%.3f ki=%.3f kd=%.3f max_turn=%d yaw_rate_gain=%.3f\n",
+              pwm, trace_config.target_reflection, trace_config.edge_sign,
+              (double)trace_config.kp, (double)trace_config.ki, (double)trace_config.kd,
+              trace_config.max_turn_pwm, (double)trace_config.yaw_rate_gain);
+    }
   }
 
   fprintf(stdout,
           "source,seq,timestamp_us,dt_us,body_us,deadline_lag_us,left_pwm,right_pwm,"
           "left_count,right_count,left_speed,right_speed,heading,"
           "accel_x,accel_y,accel_z,angv_x,angv_y,angv_z,color_r,color_g,color_b,"
-          "color_reflection,correction\n");
+          "color_reflection,correction,line_error,pid_p,pid_i,pid_d,yaw_rate\n");
   fflush(stdout);
 
   uint64_t next_deadline_us = monotonic_us();
@@ -242,6 +406,11 @@ int main(int argc, char const *argv[])
     float accel[3] = {0.0f, 0.0f, 0.0f};
     float angv[3] = {0.0f, 0.0f, 0.0f};
     pup_color_rgb_t rgb = {0};
+    float line_error = 0.0f;
+    float pid_p = 0.0f;
+    float pid_i = 0.0f;
+    float pid_d = 0.0f;
+    float yaw_rate = 0.0f;
 
     if (mode == MEASURE_MODE_ALL || mode == MEASURE_MODE_TRACE) {
       left_count = pup_motor_get_count(left);
@@ -253,9 +422,12 @@ int main(int argc, char const *argv[])
       hub_imu_get_angular_velocity(angv);
       if (mode == MEASURE_MODE_TRACE) {
         reflection = pup_color_sensor_reflection(color);
-        correction = (reflection - 50) / 2 + (int)(heading / 4.0f);
-        left_pwm = clamp_power(pwm + correction);
-        right_pwm = clamp_power(pwm - correction);
+        if (seq % 10 == 0) {
+          rgb = pup_color_sensor_rgb(color);
+        }
+        correction = trace_load_update(&trace_config, &trace_state, pwm, period_us,
+                                       reflection, heading, &left_pwm, &right_pwm,
+                                       &line_error, &pid_p, &pid_i, &pid_d, &yaw_rate);
       } else {
         rgb = pup_color_sensor_rgb(color);
       }
@@ -267,7 +439,8 @@ int main(int argc, char const *argv[])
     uint64_t end_us = monotonic_us();
     fprintf(stdout,
             "libraspike,%d,%llu,%llu,%llu,%lld,%d,%d,"
-            "%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d\n",
+            "%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,"
+            "%.6f,%.6f,%.6f,%.6f,%.6f\n",
             seq,
             (unsigned long long)start_us,
             (unsigned long long)dt_us,
@@ -290,7 +463,12 @@ int main(int argc, char const *argv[])
             rgb.g,
             rgb.b,
             reflection,
-            correction);
+            correction,
+            (double)line_error,
+            (double)pid_p,
+            (double)pid_i,
+            (double)pid_d,
+            (double)yaw_rate);
 
     next_deadline_us += (uint64_t)period_us;
   }
