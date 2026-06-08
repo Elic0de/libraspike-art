@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import csv
 import math
+import os
 import sys
 
 
@@ -22,7 +23,18 @@ def percentile(values, pct):
 def read_dt(path, source=None):
     values = []
     with open(path, newline="") as fp:
-        reader = csv.DictReader(fp)
+        header = None
+        lines = []
+        for line in fp:
+            if header is None:
+                if line.startswith("source,"):
+                    header = line
+                    lines.append(line)
+                continue
+            lines.append(line)
+        if header is None:
+            return values
+        reader = csv.DictReader(lines)
         for row in reader:
             if source is not None and row.get("source") != source:
                 continue
@@ -30,6 +42,21 @@ def read_dt(path, source=None):
             if dt > 0:
                 values.append(dt)
     return values
+
+
+def print_stats(path):
+    if not os.path.exists(path):
+        return
+    with open(path, newline="") as fp:
+        reader = csv.DictReader(fp)
+        for row in reader:
+            source = row.get("source", "unknown")
+            print(
+                f"{source}_stats: count={row.get('count')} min={row.get('min_dt_us')} "
+                f"avg={row.get('avg_dt_us')} p95={row.get('p95_dt_us')} "
+                f"p99={row.get('p99_dt_us')} max={row.get('max_dt_us')} "
+                f"out_of_range={row.get('out_of_range')} dropped={row.get('dropped')}"
+            )
 
 
 def summarize(label, values, tolerance_us):
@@ -68,7 +95,12 @@ def main():
     ok = summarize("libraspike_tx", read_dt(sys.argv[1], "libraspike"), tolerance_us)
 
     if len(sys.argv) >= 3:
-        ok = summarize("spike_mot_pow_rx", read_dt(sys.argv[2], "mot_pow_rx"), tolerance_us) and ok
+        if os.path.exists(sys.argv[2]):
+            ok = summarize("spike_mot_pow_rx", read_dt(sys.argv[2], "mot_pow_rx"), tolerance_us) and ok
+        else:
+            print(f"spike_mot_pow_rx: skipped missing file: {sys.argv[2]}")
+
+    print_stats("spike_usb_loop_stats.csv")
 
     return 0 if ok else 1
 

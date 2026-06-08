@@ -146,6 +146,7 @@ int main(int argc, char const *argv[])
     return 2;
   }
   setenv("RASPIKE_MEASURE_RX_CSV", "spike_usb_loop_period.csv", 0);
+  setenv("RASPIKE_MEASURE_STATS_CSV", "spike_usb_loop_stats.csv", 0);
 
   RPComDescriptor *desc = raspike_open_usb_communication(device);
   if (desc == NULL) {

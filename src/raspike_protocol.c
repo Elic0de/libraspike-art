@@ -119,6 +119,7 @@ static unsigned char version_major = 0;
 static unsigned char version_minor = 0;
 static unsigned char version_patch = 0;
 static FILE *fgMeasureCsv = 0;
+static FILE *fgMeasureStatsCsv = 0;
 
 static const char *measure_source_name(int source_id)
 {
@@ -156,6 +157,37 @@ static void write_measure_row(const unsigned char *buf, int size)
           measure_source_name(row.source_id), row.seq, row.timestamp_us, row.dt_us,
           row.body_us, row.deadline_lag_us, row.port, row.cmd, row.value);
   fflush(fgMeasureCsv);
+}
+
+static void write_measure_stats(const unsigned char *buf, int size)
+{
+  if (size < (int)sizeof(RPProtocolMeasureStats)) {
+    return;
+  }
+  const char *path = getenv("RASPIKE_MEASURE_STATS_CSV");
+  if (path == 0 || path[0] == '\0') {
+    return;
+  }
+  if (fgMeasureStatsCsv == 0) {
+    fgMeasureStatsCsv = fopen(path, "w");
+    if (fgMeasureStatsCsv == 0) {
+      return;
+    }
+    fprintf(fgMeasureStatsCsv,
+            "source,count,min_dt_us,avg_dt_us,p95_dt_us,p99_dt_us,max_dt_us,"
+            "out_of_range,dropped,first_timestamp_us,last_timestamp_us,sum_dt_us\n");
+  }
+
+  RPProtocolMeasureStats row;
+  memcpy(&row, buf, sizeof(row));
+  uint64_t sum_dt_us = ((uint64_t)(uint32_t)row.sum_dt_us_hi << 32) |
+                       (uint32_t)row.sum_dt_us_lo;
+  fprintf(fgMeasureStatsCsv, "%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%llu\n",
+          measure_source_name(row.source_id), row.count, row.min_dt_us,
+          row.avg_dt_us, row.p95_dt_us, row.p99_dt_us, row.max_dt_us,
+          row.out_of_range, row.dropped, row.first_timestamp_us,
+          row.last_timestamp_us, (unsigned long long)sum_dt_us);
+  fflush(fgMeasureStatsCsv);
 }
 
 int raspike_prot_init(RPComDescriptor *desc)
@@ -224,6 +256,10 @@ int raspike_prot_shutdown(void)
   if (fgMeasureCsv != 0) {
     fclose(fgMeasureCsv);
     fgMeasureCsv = 0;
+  }
+  if (fgMeasureStatsCsv != 0) {
+    fclose(fgMeasureStatsCsv);
+    fgMeasureStatsCsv = 0;
   }
   raspike_com_close(fgDesc);
   return 0;
@@ -309,6 +345,9 @@ static int process_command(RasPikePort port, unsigned char cmd, unsigned char *b
       break;
   case RP_CMD_ID_MEASURE_ROW:
     write_measure_row(buf, size);
+    break;
+  case RP_CMD_ID_MEASURE_STATS:
+    write_measure_stats(buf, size);
     break;
   default:
     ret = -1;

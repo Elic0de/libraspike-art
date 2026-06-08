@@ -3,3 +3,4 @@ lib/*.a
 sample/*.o
 sample/loop_period_measure
 sample/*_loop_period.csv
+sample/spike_usb_loop_stats.csv
