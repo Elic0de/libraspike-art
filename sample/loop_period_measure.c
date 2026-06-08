@@ -67,12 +67,12 @@ static int port_id(const char *name)
     fprintf(stderr, "port must be A-F: %s\n", name == NULL ? "(null)" : name);
     exit(2);
   }
-  return name[0] - 'A';
+  return name[0];
 }
 
 static char port_name(int port)
 {
-  return (char)('A' + port);
+  return (char)port;
 }
 
 static int parse_int_arg(const char *value, const char *label)
