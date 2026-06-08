@@ -47,16 +47,20 @@ def read_dt(path, source=None):
 def print_stats(path):
     if not os.path.exists(path):
         return
+    latest_rows = {}
     with open(path, newline="") as fp:
         reader = csv.DictReader(fp)
         for row in reader:
             source = row.get("source", "unknown")
-            print(
-                f"{source}_stats: count={row.get('count')} min={row.get('min_dt_us')} "
-                f"avg={row.get('avg_dt_us')} p95={row.get('p95_dt_us')} "
-                f"p99={row.get('p99_dt_us')} max={row.get('max_dt_us')} "
-                f"out_of_range={row.get('out_of_range')} dropped={row.get('dropped')}"
-            )
+            latest_rows[source] = row
+
+    for source, row in latest_rows.items():
+        print(
+            f"{source}_stats: count={row.get('count')} min={row.get('min_dt_us')} "
+            f"avg={row.get('avg_dt_us')} p95={row.get('p95_dt_us')} "
+            f"p99={row.get('p99_dt_us')} max={row.get('max_dt_us')} "
+            f"out_of_range={row.get('out_of_range')} dropped={row.get('dropped')}"
+        )
 
 
 def summarize(label, values, tolerance_us):
