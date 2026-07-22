@@ -20,8 +20,10 @@ extern "C" {
 
   extern int raspike_com_send(RPComDescriptor *desc, const unsigned char *buf, int size);
   extern int raspike_com_receive(RPComDescriptor *desc, unsigned char *buf, int size);
+  extern int raspike_com_receive_timeout(RPComDescriptor *desc, unsigned char *buf, int size, int timeout_ms);
   extern int raspike_com_close(RPComDescriptor *desc);
-  extern int raspike_com_flush(RPComDescriptor *desc);  
+  extern int raspike_com_flush(RPComDescriptor *desc);
+  extern int raspike_com_discard_input(RPComDescriptor *desc);
   
 
   

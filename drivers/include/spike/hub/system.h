@@ -51,6 +51,12 @@ extern "C" {
  */
 void hub_system_shutdown(void);
 
+/** Restart the Hub through the active RasPike bridge connection. */
+void hub_system_restart(void);
+
+/** Safely reboot the Hub into firmware update (DFU) mode. */
+void hub_system_enter_update_mode(void);
+
 #ifdef __cplusplus
 }
 #endif
